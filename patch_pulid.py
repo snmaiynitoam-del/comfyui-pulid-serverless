@@ -134,23 +134,23 @@ new_fa_call = '''import glob as _glob
                 break
         if _actual_root is None:
             _actual_root = INSIGHTFACE_DIR
-        # Monkey-patch insightface model_zoo to use explicit providers with GPU+CPU fallback
-        import insightface.model_zoo.model_zoo as _mz
-        _orig_get_model = _mz.get_model
-        def _patched_get_model(name, **kwargs):
-            if 'providers' not in kwargs:
-                kwargs['providers'] = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            try:
-                return _orig_get_model(name, **kwargs)
-            except Exception as e:
-                print(f"[PuLID-Debug] model_zoo.get_model failed with providers {kwargs.get('providers')}: {e}")
-                # Try CPU only as last resort
-                kwargs['providers'] = ['CPUExecutionProvider']
-                return _orig_get_model(name, **kwargs)
-        _mz.get_model = _patched_get_model
-        model = FaceAnalysis(name="antelopev2", root=_actual_root)
-        # Restore original
-        _mz.get_model = _orig_get_model'''
+        # Monkey-patch onnxruntime.InferenceSession to skip TensorRT (causes silent failures)
+        # and explicitly use CUDA+CPU providers
+        _orig_session_init = _ort.InferenceSession.__init__
+        def _patched_session_init(self, path_or_bytes, sess_options=None, providers=None, provider_options=None, **kwargs):
+            if providers is None:
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                print(f"[PuLID-Debug] Loading ONNX model with providers: {providers}")
+            _orig_session_init(self, path_or_bytes, sess_options, providers=providers, provider_options=provider_options, **kwargs)
+        _ort.InferenceSession.__init__ = _patched_session_init
+        try:
+            model = FaceAnalysis(name="antelopev2", root=_actual_root)
+            print(f"[PuLID-Debug] FaceAnalysis loaded successfully! Models: {list(model.models.keys())}")
+        except Exception as _e:
+            print(f"[PuLID-Debug] FaceAnalysis failed: {_e}")
+            raise
+        finally:
+            _ort.InferenceSession.__init__ = _orig_session_init'''
 
 if old_fa_call in content:
     content = content.replace(old_fa_call, new_fa_call)
