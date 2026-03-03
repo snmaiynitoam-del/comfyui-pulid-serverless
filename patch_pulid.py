@@ -90,6 +90,25 @@ if "model_rootpath" not in content and "FaceRestoreHelper" in content:
         patched = True
         print("Fix 5: Added model_rootpath to FaceRestoreHelper")
 
+# Fix 6: Fix InsightFace FaceAnalysis providers argument (newer insightface API change)
+# Newer insightface versions don't accept 'providers' in __init__, must be passed separately
+old_fa = """model = FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR, providers=[provider + 'ExecutionProvider',])"""
+new_fa = """model = FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR)"""
+if old_fa in content:
+    content = content.replace(old_fa, new_fa)
+    patched = True
+    print("Fix 6: Removed providers kwarg from FaceAnalysis (newer insightface compat)")
+else:
+    # Try regex match for variations
+    content, n = re.subn(
+        r"FaceAnalysis\(name=\"antelopev2\",\s*root=INSIGHTFACE_DIR,\s*providers=\[[^\]]*\]\)",
+        'FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR)',
+        content
+    )
+    if n > 0:
+        patched = True
+        print("Fix 6: Removed providers kwarg from FaceAnalysis (regex)")
+
 if patched:
     with open(PULID_FILE, "w") as f:
         f.write(content)
