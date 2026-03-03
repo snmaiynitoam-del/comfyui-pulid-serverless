@@ -109,15 +109,18 @@ else:
         patched = True
         print("Fix 6: Removed providers kwarg from FaceAnalysis (regex)")
 
-# Fix 7: Replace InsightFace loading with robust multi-path version + debug logging
-# The FaceAnalysis call fails with assert 'detection' because either the path is wrong
-# or onnxruntime can't load models. This fix tries multiple paths and prints debug info.
+# Fix 7: Replace InsightFace loading with robust multi-path version + TensorRT stripping
+# Root cause: InsightFace passes providers EXPLICITLY to onnxruntime.InferenceSession,
+# so checking "if providers is None" never fires. TensorrtExecutionProvider silently fails
+# to load ONNX models on RunPod, causing 'assert detection in self.models'.
+# Fix: unconditionally strip TensorRT from ALL InferenceSession calls AND hide it from
+# get_available_providers() so InsightFace never sees it.
 old_fa_call = 'model = FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR)'
 new_fa_call = '''import glob as _glob
         import onnxruntime as _ort
         # Debug: print ONNX runtime info
         print(f"[PuLID-Debug] onnxruntime version: {_ort.__version__}")
-        print(f"[PuLID-Debug] Available providers: {_ort.get_available_providers()}")
+        print(f"[PuLID-Debug] Available providers (raw): {_ort.get_available_providers()}")
         print(f"[PuLID-Debug] INSIGHTFACE_DIR = {INSIGHTFACE_DIR}")
         _search_paths = [
             INSIGHTFACE_DIR,
@@ -134,15 +137,39 @@ new_fa_call = '''import glob as _glob
                 break
         if _actual_root is None:
             _actual_root = INSIGHTFACE_DIR
-        # Monkey-patch onnxruntime.InferenceSession to skip TensorRT (causes silent failures)
-        # and explicitly use CUDA+CPU providers
+
+        # ====== TensorRT stripping (Fix 10) ======
+        # Patch get_available_providers() to hide TensorRT entirely.
+        # InsightFace uses this to build its default providers list.
+        _orig_get_providers = _ort.get_available_providers
+        def _patched_get_providers():
+            return [p for p in _orig_get_providers() if 'Tensorrt' not in p and 'TensorRT' not in p]
+        _ort.get_available_providers = _patched_get_providers
+
+        # Patch InferenceSession.__init__ to UNCONDITIONALLY strip TensorRT
+        # from any providers list (InsightFace always passes providers explicitly).
         _orig_session_init = _ort.InferenceSession.__init__
         def _patched_session_init(self, path_or_bytes, sess_options=None, providers=None, provider_options=None, **kwargs):
-            if providers is None:
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-                print(f"[PuLID-Debug] Loading ONNX model with providers: {providers}")
+            if providers is not None:
+                _filtered = []
+                _filtered_opts = []
+                for _i, _p in enumerate(providers):
+                    _pname = _p[0] if isinstance(_p, tuple) else _p
+                    if 'Tensorrt' not in _pname and 'TensorRT' not in _pname:
+                        _filtered.append(_p)
+                        if provider_options is not None and _i < len(provider_options):
+                            _filtered_opts.append(provider_options[_i])
+                    else:
+                        print(f"[PuLID-Debug] Stripped {_pname} from session providers")
+                providers = _filtered if _filtered else ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                provider_options = _filtered_opts if _filtered_opts else None
+                if provider_options is not None and len(provider_options) == 0:
+                    provider_options = None
+            print(f"[PuLID-Debug] InferenceSession providers: {providers}")
             _orig_session_init(self, path_or_bytes, sess_options, providers=providers, provider_options=provider_options, **kwargs)
         _ort.InferenceSession.__init__ = _patched_session_init
+
+        print(f"[PuLID-Debug] Effective providers after patch: {_ort.get_available_providers()}")
         try:
             model = FaceAnalysis(name="antelopev2", root=_actual_root)
             print(f"[PuLID-Debug] FaceAnalysis loaded successfully! Models: {list(model.models.keys())}")
@@ -150,12 +177,14 @@ new_fa_call = '''import glob as _glob
             print(f"[PuLID-Debug] FaceAnalysis failed: {_e}")
             raise
         finally:
-            _ort.InferenceSession.__init__ = _orig_session_init'''
+            # Restore originals so other code is unaffected
+            _ort.InferenceSession.__init__ = _orig_session_init
+            _ort.get_available_providers = _orig_get_providers'''
 
 if old_fa_call in content:
     content = content.replace(old_fa_call, new_fa_call)
     patched = True
-    print("Fix 7: Added robust multi-path InsightFace loading with debug")
+    print("Fix 7+10: Robust InsightFace loading with TensorRT stripping")
 else:
     # If Fix 6 already ran, the line should match. If not, try regex
     content, n = re.subn(
@@ -166,7 +195,7 @@ else:
     )
     if n > 0:
         patched = True
-        print("Fix 7: Added robust multi-path InsightFace loading with debug (regex)")
+        print("Fix 7+10: Robust InsightFace loading with TensorRT stripping (regex)")
 
 if patched:
     with open(PULID_FILE, "w") as f:
