@@ -109,6 +109,55 @@ else:
         patched = True
         print("Fix 6: Removed providers kwarg from FaceAnalysis (regex)")
 
+# Fix 7: Replace InsightFace loading with robust multi-path version + debug logging
+# The FaceAnalysis call fails with assert 'detection' because either the path is wrong
+# or onnxruntime can't load models. This fix tries multiple paths and prints debug info.
+old_fa_call = 'model = FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR)'
+new_fa_call = '''import glob as _glob
+        # Debug: print what INSIGHTFACE_DIR is
+        print(f"[PuLID-Debug] INSIGHTFACE_DIR = {INSIGHTFACE_DIR}")
+        _search_paths = [
+            INSIGHTFACE_DIR,
+            "/runpod-volume/insightface",
+            os.path.join(folder_paths.models_dir, "insightface"),
+        ]
+        _actual_root = None
+        for _try_root in _search_paths:
+            _model_dir = os.path.join(_try_root, "models", "antelopev2")
+            _onnx_files = _glob.glob(os.path.join(_model_dir, "*.onnx"))
+            print(f"[PuLID-Debug] Checking {_model_dir}: {len(_onnx_files)} .onnx files found")
+            if _onnx_files:
+                _actual_root = _try_root
+                print(f"[PuLID-Debug] Using root: {_actual_root}")
+                for _f in _onnx_files:
+                    print(f"[PuLID-Debug]   - {os.path.basename(_f)} ({os.path.getsize(_f)} bytes)")
+                break
+        if _actual_root is None:
+            # Last resort: list what's actually on the volume
+            for _p in ["/runpod-volume", "/runpod-volume/insightface", "/comfyui/models/insightface"]:
+                if os.path.exists(_p):
+                    print(f"[PuLID-Debug] Contents of {_p}: {os.listdir(_p)}")
+                else:
+                    print(f"[PuLID-Debug] Path does not exist: {_p}")
+            _actual_root = INSIGHTFACE_DIR
+        model = FaceAnalysis(name="antelopev2", root=_actual_root)'''
+
+if old_fa_call in content:
+    content = content.replace(old_fa_call, new_fa_call)
+    patched = True
+    print("Fix 7: Added robust multi-path InsightFace loading with debug")
+else:
+    # If Fix 6 already ran, the line should match. If not, try regex
+    content, n = re.subn(
+        r'model\s*=\s*FaceAnalysis\(name="antelopev2",\s*root=INSIGHTFACE_DIR\)',
+        new_fa_call,
+        content,
+        count=1
+    )
+    if n > 0:
+        patched = True
+        print("Fix 7: Added robust multi-path InsightFace loading with debug (regex)")
+
 if patched:
     with open(PULID_FILE, "w") as f:
         f.write(content)
