@@ -13,3 +13,10 @@ RUN python /tmp/patch_pulid.py
 
 # Override model paths to match our network volume layout
 COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
+
+# Create symlinks so PuLID's hardcoded paths resolve to network volume at runtime
+# InsightFace: PuLID uses folder_paths.models_dir + "insightface" → /comfyui/models/insightface
+# FaceXLib: PuLID uses folder_paths.models_dir + "facexlib" → /comfyui/models/facexlib
+RUN ln -sf /runpod-volume/insightface /comfyui/models/insightface && \
+    ln -sf /runpod-volume/facexlib /comfyui/models/facexlib && \
+    ln -sf /runpod-volume/pulid /comfyui/models/pulid
