@@ -114,7 +114,10 @@ else:
 # or onnxruntime can't load models. This fix tries multiple paths and prints debug info.
 old_fa_call = 'model = FaceAnalysis(name="antelopev2", root=INSIGHTFACE_DIR)'
 new_fa_call = '''import glob as _glob
-        # Debug: print what INSIGHTFACE_DIR is
+        import onnxruntime as _ort
+        # Debug: print ONNX runtime info
+        print(f"[PuLID-Debug] onnxruntime version: {_ort.__version__}")
+        print(f"[PuLID-Debug] Available providers: {_ort.get_available_providers()}")
         print(f"[PuLID-Debug] INSIGHTFACE_DIR = {INSIGHTFACE_DIR}")
         _search_paths = [
             INSIGHTFACE_DIR,
@@ -125,22 +128,29 @@ new_fa_call = '''import glob as _glob
         for _try_root in _search_paths:
             _model_dir = os.path.join(_try_root, "models", "antelopev2")
             _onnx_files = _glob.glob(os.path.join(_model_dir, "*.onnx"))
-            print(f"[PuLID-Debug] Checking {_model_dir}: {len(_onnx_files)} .onnx files found")
             if _onnx_files:
                 _actual_root = _try_root
-                print(f"[PuLID-Debug] Using root: {_actual_root}")
-                for _f in _onnx_files:
-                    print(f"[PuLID-Debug]   - {os.path.basename(_f)} ({os.path.getsize(_f)} bytes)")
+                print(f"[PuLID-Debug] Using root: {_actual_root} ({len(_onnx_files)} .onnx files)")
                 break
         if _actual_root is None:
-            # Last resort: list what's actually on the volume
-            for _p in ["/runpod-volume", "/runpod-volume/insightface", "/comfyui/models/insightface"]:
-                if os.path.exists(_p):
-                    print(f"[PuLID-Debug] Contents of {_p}: {os.listdir(_p)}")
-                else:
-                    print(f"[PuLID-Debug] Path does not exist: {_p}")
             _actual_root = INSIGHTFACE_DIR
-        model = FaceAnalysis(name="antelopev2", root=_actual_root)'''
+        # Monkey-patch insightface model_zoo to use explicit providers with GPU+CPU fallback
+        import insightface.model_zoo.model_zoo as _mz
+        _orig_get_model = _mz.get_model
+        def _patched_get_model(name, **kwargs):
+            if 'providers' not in kwargs:
+                kwargs['providers'] = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            try:
+                return _orig_get_model(name, **kwargs)
+            except Exception as e:
+                print(f"[PuLID-Debug] model_zoo.get_model failed with providers {kwargs.get('providers')}: {e}")
+                # Try CPU only as last resort
+                kwargs['providers'] = ['CPUExecutionProvider']
+                return _orig_get_model(name, **kwargs)
+        _mz.get_model = _patched_get_model
+        model = FaceAnalysis(name="antelopev2", root=_actual_root)
+        # Restore original
+        _mz.get_model = _orig_get_model'''
 
 if old_fa_call in content:
     content = content.replace(old_fa_call, new_fa_call)

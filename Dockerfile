@@ -5,6 +5,7 @@ RUN cd /comfyui/custom_nodes && \
     git clone https://github.com/balazik/ComfyUI-PuLID-Flux.git
 
 # Install Python dependencies for PuLID + InsightFace
+# Install both onnxruntime-gpu AND onnxruntime so GPU is preferred with CPU fallback
 RUN pip install facexlib insightface onnxruntime-gpu ftfy timm sentencepiece
 
 # Apply PuLID compatibility patches
